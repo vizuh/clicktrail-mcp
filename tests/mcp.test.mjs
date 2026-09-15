@@ -29,6 +29,8 @@ test('inspects a project and reports unproven runtime evidence', () => {
   const inspection = inspectProject({ framework: 'nextjs', packageJson: { dependencies: { next: '16' } }, files: { 'middleware.ts': 'capture gclid into cookie' } });
   assert.equal(inspection.framework, 'nextjs');
   assert.equal(inspection.evidence.capture.status, 'pass');
+  assert.equal(inspection.evidence.capture.reason, undefined);
+  assert.match(inspection.evidence.attach.reason, /No lead/);
   assert.equal(detectAttributionGaps(inspection).status, 'blocked');
 });
 
@@ -66,6 +68,15 @@ test('stdio server returns protocol errors without crashing', async () => {
   assert.equal(result.code, 0);
   assert.deepEqual(responses.slice(0, 2).map((response) => response.error.code), [-32700, -32600]);
   assert.equal(responses[2].result.tools.length, 20);
+  for (const tool of responses[2].result.tools) {
+    assert.deepEqual(tool.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+    for (const [key, property] of Object.entries(tool.inputSchema.properties)) {
+      assert.ok(property.description?.trim(), `${tool.name}.${key} needs parameter guidance`);
+    }
+  }
+  const statusTool = responses[2].result.tools.find((tool) => tool.name === 'check_conversion_status');
+  assert.match(statusTool.description, /status=unknown/);
+  assert.match(statusTool.description, /verify_conversion_delivery/);
   assert.equal(responses[3].result.isError, false);
 });
 
@@ -81,3 +92,48 @@ function runServer(input) {
     child.stdin.end(input);
   });
 }
+
+
+test('publishes workflow instructions and matching structured status and simulation results', async () => {
+  const calls = [
+    ['check_conversion_status', {}],
+    ['check_conversion_status', { eventId: '' }],
+    ['check_conversion_status', { eventId: 'evt_demo_1' }],
+    ['simulate_ad_click', { url: 'https://example.test/?gclid=synthetic', consent: true, accountId: 'acct_demo', eventId: 'evt_demo_1' }],
+    ['simulate_ad_click', { url: 'https://example.test/?gclid=synthetic' }],
+    ['simulate_ad_click', { url: 'not a URL', consent: true }],
+  ];
+  const messages = [
+    { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2099-01-01' } },
+    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ...calls.map(([name, args], i) => ({ jsonrpc: '2.0', id: i + 2, method: 'tools/call', params: { name, arguments: args } })),
+    { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'check_conversion_status', arguments: { eventId: 3 } } },
+  ];
+  const result = await runServer(messages.map((message) => JSON.stringify(message)).join('\n') + '\n');
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, '');
+  const responses = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(responses[0].result.protocolVersion, '2025-06-18');
+  assert.match(responses[0].result.instructions, /send_\* tools only build payloads/);
+  assert.match(responses[0].result.instructions, /evidence field/);
+  const definitions = responses[1].result.tools;
+  for (const [i, [name]] of calls.entries()) {
+    const response = responses[i + 2].result;
+    assert.equal(response.isError, false);
+    assert.deepEqual(response.structuredContent, JSON.parse(response.content[0].text));
+    const schema = definitions.find((tool) => tool.name === name).outputSchema;
+    assert.deepEqual(Object.keys(response.structuredContent).sort(), schema.required.slice().sort());
+  }
+  assert.deepEqual(responses.slice(2, 5).map(({ result }) => [result.structuredContent.eventId, result.structuredContent.status]), [[null, 'unknown'], [null, 'unknown'], ['evt_demo_1', 'unknown']]);
+  const successful = responses[5].result.structuredContent;
+  assert.equal(successful.evidence, 'synthetic-local-only');
+  assert.deepEqual(successful.stages, { capture: true, persist: true, carry: true, attach: true, report: false, dedupe: true, verify: false });
+  assert.equal(successful.statuses.report.status, 'unknown');
+  const denied = responses[6].result.structuredContent;
+  assert.equal(denied.consent, false);
+  assert.equal(denied.stages.capture, false);
+  assert.deepEqual(denied.clickIds, { gclid: 'synthetic' });
+  assert.deepEqual(responses[7].result.structuredContent.clickIds, {});
+  assert.equal(responses[8].result.isError, true);
+  assert.equal(responses[8].result.structuredContent, undefined);
+});
