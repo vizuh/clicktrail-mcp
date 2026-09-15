@@ -1,6 +1,6 @@
 {
   "name": "@vizuh/clicktrail-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dependency-light MCP stdio server for ClickTrail attribution schemas, diagnostics, validation, and reconciliation.",
   "type": "module",
   "bin": { "clicktrail-mcp": "./dist/index.mjs" },

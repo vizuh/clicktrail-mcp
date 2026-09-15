@@ -3,7 +3,7 @@
   "name": "io.github.vizuh/clicktrail",
   "title": "ClickTrail Attribution",
   "description": "Attribution schemas, click ID diagnostics, integration code generation, pipeline validation, coverage, and conversion reconciliation.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": { "url": "https://github.com/vizuh/clicktrail-mcp", "source": "github" },
-  "packages": [{ "registryType": "npm", "identifier": "@vizuh/clicktrail-mcp", "version": "0.1.0", "transport": { "type": "stdio" } }]
+  "packages": [{ "registryType": "npm", "identifier": "@vizuh/clicktrail-mcp", "version": "0.2.0", "transport": { "type": "stdio" } }]
 }
