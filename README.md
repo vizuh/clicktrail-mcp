@@ -37,6 +37,19 @@ Example Codex configuration:
 codex mcp add clicktrail -- npx -y @vizuh/clicktrail-mcp
 ```
 
+Grok Build can use the same local stdio server after a checked-out build:
+
+```sh
+grok mcp add --scope project clicktrail -- node /path/to/clicktrail-mcp/dist/index.mjs
+grok inspect
+```
+
+This manual setup is intentional while `@vizuh/clicktrail-mcp@0.2.0` is not
+published on npm. Do not copy an `npx` command into a distributable plugin until
+that exact package version is reachable from the public registry. xAI's
+Responses API remote MCP surface is separate and accepts streaming HTTP or SSE,
+not this stdio process.
+
 The server reads newline-delimited JSON-RPC messages from stdin and writes responses to stdout. It does not read project files, call ad platforms, transmit customer data, or claim live verification without an explicit provider receipt.
 
 ## Workflow tools

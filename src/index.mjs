@@ -2,8 +2,10 @@
 import readline from 'node:readline';
 import { TOOL_DEFINITIONS, TOOL_SCHEMAS, validateToolInput } from './tools.mjs';
 
+const SUPPORTED_PROTOCOL_VERSION = '2025-06-18';
 const definitions = TOOL_DEFINITIONS.map(([name, description]) => ({ name, description, inputSchema: TOOL_SCHEMAS[name] }));
 const handlers = new Map(TOOL_DEFINITIONS.map(([name, , handler]) => [name, handler]));
+const negotiateProtocolVersion = (requested) => requested === SUPPORTED_PROTOCOL_VERSION ? requested : SUPPORTED_PROTOCOL_VERSION;
 function write(message) { process.stdout.write(`${JSON.stringify(message)}\n`); }
 function result(id, body) { write({ jsonrpc: '2.0', id, result: body }); }
 function error(id, code, message) { write({ jsonrpc: '2.0', id, error: { code, message } }); }
@@ -16,7 +18,7 @@ async function handle(message) {
   }
   const isNotification = !Object.hasOwn(message, 'id');
   if (message.method === 'notifications/initialized' || message.method === 'notifications/cancelled') return;
-  if (message.method === 'initialize') return isNotification ? undefined : result(message.id, { protocolVersion: message.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'clicktrail-mcp', version: '0.2.0' } });
+  if (message.method === 'initialize') return isNotification ? undefined : result(message.id, { protocolVersion: negotiateProtocolVersion(message.params?.protocolVersion), capabilities: { tools: {} }, serverInfo: { name: 'clicktrail-mcp', version: '0.2.0' } });
   if (message.method === 'ping') return isNotification ? undefined : result(message.id, {});
   if (message.method === 'tools/list') return isNotification ? undefined : result(message.id, { tools: definitions });
   if (message.method === 'tools/call') {

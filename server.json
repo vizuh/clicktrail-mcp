@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.vizuh/clicktrail",
   "title": "ClickTrail Attribution",
-  "description": "Inspect and complete ClickTrail attribution handoffs across owned web stacks, with consent-aware plans, diagnostics, and evidence-bounded verification.",
+  "description": "Consent-aware attribution handoff diagnostics and verification for owned web stacks.",
   "version": "0.2.0",
   "repository": { "url": "https://github.com/vizuh/clicktrail-mcp", "source": "github" },
   "packages": [{ "registryType": "npm", "identifier": "@vizuh/clicktrail-mcp", "version": "0.2.0", "transport": { "type": "stdio" } }]
