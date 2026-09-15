@@ -1,7 +1,7 @@
 {
   "name": "@vizuh/clicktrail-mcp",
   "version": "0.2.0",
-  "description": "Dependency-light MCP stdio server for ClickTrail attribution schemas, diagnostics, validation, and reconciliation.",
+  "description": "MCP server for inspecting and completing ClickTrail attribution handoffs across the stack a team owns.",
   "type": "module",
   "bin": { "clicktrail-mcp": "./dist/index.mjs" },
   "files": ["dist", "server.json", "README.md", "LICENSE"],

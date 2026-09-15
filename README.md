@@ -1,6 +1,12 @@
 # ClickTrail MCP
 
-A dependency-light Model Context Protocol stdio server for attribution engineering. It helps coding agents inspect a supplied project snapshot, detect attribution gaps, plan and generate consent-aware integrations, simulate synthetic journeys, verify each lifecycle boundary, calculate coverage, and reconcile conversion records.
+> **ClickTrail is the open-source attribution handoff layer that keeps observed acquisition context attached to conversion records inside the stack you own.**
+
+ClickTrail MCP makes that handoff inspectable and completable by coding agents.
+It helps agents inspect a supplied project snapshot, detect attribution gaps,
+plan and generate consent-aware integrations, simulate synthetic journeys,
+verify each lifecycle boundary, calculate coverage, and reconcile conversion
+records.
 
 ## Build and test
 
