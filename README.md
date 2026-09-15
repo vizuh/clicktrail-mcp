@@ -21,4 +21,4 @@ The server reads newline-delimited JSON-RPC messages from stdin and writes respo
 
 ## Tools
 
-`capture_click_id_schema`, `generate_nextjs_integration`, `generate_shopify_integration`, `validate_attribution_pipeline`, `diagnose_missing_click_ids`, `calculate_click_id_coverage`, and `reconcile_conversions`.
+`capture_click_id_schema`, `generate_nextjs_integration`, `generate_shopify_integration`, `validate_attribution_pipeline`, `diagnose_missing_click_ids`, `calculate_click_id_coverage`, `reconcile_conversions`, `send_conversion`, `send_qualified_lead`, `send_sale`, and `check_conversion_status`. Delivery tools build payloads only; they do not call a provider.

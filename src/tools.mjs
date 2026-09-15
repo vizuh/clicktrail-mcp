@@ -85,6 +85,16 @@ export function reconcileConversions(input = {}) {
   return { crmCount: crm.length, destinationCount: destination.length, matchedCount: matched.length, missingFromDestination: missing, destinationWithoutCrm: orphaned, valueDifference: Number((crm.reduce((s, r) => s + Number(r?.value || 0), 0) - destination.reduce((s, r) => s + Number(r?.value || 0), 0)).toFixed(2)) };
 }
 
+export function buildConversion(input = {}, eventName = 'Purchase') {
+  const eventId = typeof input.eventId === 'string' && input.eventId ? input.eventId : null;
+  if (!eventId) throw new TypeError('eventId is required');
+  return { eventId, eventName, value: Number(input.value || 0), currency: String(input.currency || 'USD').toUpperCase(), clickIds: Object.fromEntries(CLICK_IDS.flatMap((key) => input.clickIds?.[key] ? [[key, String(input.clickIds[key]).slice(0, 512)]] : [])), delivery: 'caller-must-configure-destination-and-consent' };
+}
+export function sendConversion(input = {}) { return { action: 'send_conversion', payload: buildConversion(input, input.eventName || 'Conversion'), sideEffects: false }; }
+export function sendQualifiedLead(input = {}) { return { action: 'send_qualified_lead', payload: buildConversion(input, 'QualifiedLead'), sideEffects: false }; }
+export function sendSale(input = {}) { return { action: 'send_sale', payload: buildConversion(input, 'Purchase'), sideEffects: false }; }
+export function checkConversionStatus(input = {}) { return { eventId: input.eventId || null, status: 'unknown', reason: 'This local MCP server does not call destination APIs', nextChecks: ['Inspect the destination request log', 'Query the destination conversion diagnostics', 'Reconcile the event ID against the CRM record'] }; }
+
 export const TOOL_DEFINITIONS = [
   ['capture_click_id_schema', 'Return the canonical click ID allowlist and lifecycle schema.', captureClickIdSchema],
   ['generate_nextjs_integration', 'Generate a minimal Next.js attribution integration.', generateNextjsIntegration],
@@ -92,5 +102,9 @@ export const TOOL_DEFINITIONS = [
   ['validate_attribution_pipeline', 'Validate declared attribution lifecycle stages and consent.', validateAttributionPipeline],
   ['diagnose_missing_click_ids', 'Diagnose common click ID loss boundaries.', diagnoseMissingClickIds],
   ['calculate_click_id_coverage', 'Calculate capture, persistence, and attachment coverage.', calculateClickIdCoverage],
-  ['reconcile_conversions', 'Reconcile CRM conversions against destination conversion records.', reconcileConversions]
+  ['reconcile_conversions', 'Reconcile CRM conversions against destination conversion records.', reconcileConversions],
+  ['send_conversion', 'Build a destination-neutral conversion payload without network side effects.', sendConversion],
+  ['send_qualified_lead', 'Build a qualified lead conversion payload without network side effects.', sendQualifiedLead],
+  ['send_sale', 'Build a sale conversion payload without network side effects.', sendSale],
+  ['check_conversion_status', 'Explain how to verify a conversion without querying a provider.', checkConversionStatus]
 ];
