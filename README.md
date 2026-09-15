@@ -59,4 +59,36 @@ The server reads newline-delimited JSON-RPC messages from stdin and writes respo
 - `simulate_ad_click` → `verify_capture` → `verify_form_attachment` → `verify_crm_attachment`
 - `verify_conversion_delivery` → `attribution_health`
 
-The server also provides `capture_click_id_schema`, `validate_attribution_pipeline`, `diagnose_missing_click_ids`, `calculate_click_id_coverage`, `reconcile_conversions`, `send_conversion`, `send_qualified_lead`, `send_sale`, and `check_conversion_status`. Delivery tools build payloads only. Provider status is `unknown` unless a caller supplies a receipt.
+The server also provides `capture_click_id_schema`, `validate_attribution_pipeline`, `diagnose_missing_click_ids`, `calculate_click_id_coverage`, `reconcile_conversions`, `send_conversion`, `send_qualified_lead`, `send_sale`, and `check_conversion_status`. Delivery tools build payloads only. `check_conversion_status` always returns `unknown`; `verify_conversion_delivery` classifies a caller-supplied receipt without authenticating it.
+
+
+## Choosing tools and interpreting results
+
+All 20 tools operate locally on supplied data, need no credentials, and perform
+no external writes or provider calls. Discovery includes parameter descriptions
+and read-only annotations; initialization includes workflow guidance.
+
+| Question | Tool | Result boundary |
+| --- | --- | --- |
+| What does this source snapshot contain? | `inspect_project` | Keyword signals, not executed tests |
+| Which lifecycle stages need work? | `detect_attribution_gaps` | Pass only `{ "evidence": inspection.evidence }` |
+| Why were click IDs lost? | `diagnose_missing_click_ids` | Query, redirect, cookie, and browser observations |
+| What fraction of sessions carried attribution? | `calculate_click_id_coverage` | Ratios over supplied sessions |
+| How many declared stages pass? | `attribution_health` | Seven-stage summary, not traffic measurement |
+| How should I verify an event without a receipt? | `check_conversion_status` | Always `unknown`, with manual next checks |
+| Does this supplied receipt report acceptance? | `verify_conversion_delivery` | No receipt provenance or event-ID verification |
+| Do CRM and destination records match? | `reconcile_conversions` | Event-ID matching and same-currency totals |
+
+`check_conversion_status` and `simulate_ad_click` expose output schemas and return
+both `structuredContent` and equivalent JSON text for older clients. For example:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_conversion_status","arguments":{"eventId":"evt_demo_1"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"simulate_ad_click","arguments":{"url":"https://example.test/?gclid=synthetic","consent":true,"accountId":"acct_demo","eventId":"evt_demo_1"}}}
+```
+
+The status call echoes the event ID with `status: "unknown"`, a reason, and
+`nextChecks`. The simulation returns `evidence: "synthetic-local-only"`; reporting
+and verification remain unproven. Parsed IDs can appear in its result without
+consent, but no storage occurs. Empty form or CRM expectations check no keys and
+must not be treated as handoff proof.
