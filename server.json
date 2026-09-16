@@ -3,7 +3,7 @@
   "name": "io.github.vizuh/clicktrail",
   "title": "ClickTrail Attribution",
   "description": "Consent-aware attribution handoff diagnostics and verification for owned web stacks.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "repository": { "url": "https://github.com/vizuh/clicktrail-mcp", "source": "github" },
-  "packages": [{ "registryType": "npm", "identifier": "@vizuh/clicktrail-mcp", "version": "0.2.0", "transport": { "type": "stdio" } }]
+  "packages": [{ "registryType": "npm", "identifier": "@vizuh/clicktrail-mcp", "version": "0.3.0", "transport": { "type": "stdio" } }]
 }

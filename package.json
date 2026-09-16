@@ -1,11 +1,11 @@
 {
   "name": "@vizuh/clicktrail-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "mcpName": "io.github.vizuh/clicktrail",
   "description": "MCP server for inspecting and completing ClickTrail attribution handoffs across the stack a team owns.",
   "type": "module",
   "bin": { "clicktrail-mcp": "./dist/index.mjs" },
-  "files": ["dist", "server.json", "README.md", "LICENSE"],
+  "files": ["dist", "server.json", "docs", "README.md", "LICENSE"],
   "scripts": { "build": "node scripts/build.mjs", "test": "node --test tests/*.test.mjs", "typecheck": "node --check src/index.mjs && node --check src/tools.mjs" },
   "keywords": ["mcp", "attribution", "offline-conversions", "google-ads", "meta-capi", "clicktrail"],
   "publishConfig": { "access": "public" },

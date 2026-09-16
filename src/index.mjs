@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { TOOL_DEFINITIONS, TOOL_SCHEMAS, TOOL_OUTPUT_SCHEMAS, validateToolInput } from './tools.mjs';
 
 const SUPPORTED_PROTOCOL_VERSION = '2025-06-18';
-const INSTRUCTIONS = 'ClickTrail operates on caller-supplied, secret-free snapshots and synthetic data only. No tool reads files, calls providers, requires credentials, or changes external state. Start with inspect_project, pass its evidence field to detect_attribution_gaps, then use plan_installation. Use diagnose_missing_click_ids for query/cookie loss and calculate_click_id_coverage for session ratios. Use simulate_ad_click for a local model, verify_* for supplied boundary evidence, and attribution_health for a declared-stage summary. The send_* tools only build payloads: send_conversion supports custom event names, send_sale fixes Purchase, and send_qualified_lead fixes QualifiedLead. check_conversion_status always returns unknown plus a checklist; verify_conversion_delivery classifies an unverified caller receipt. No result proves live delivery, consent compliance, or provider provenance.';
+const INSTRUCTIONS = 'ClickTrail uses a deterministic evidence-first flow. Start with inspect_project for a supplied snapshot, or verify_project for an explicit local repository and synthetic/staging URL. Pass the returned evidence envelope to advise_report for optional TypeSafe System One routing and remediation ranking. TypeSafe receives redacted summaries only and cannot alter deterministic findings. Use the evidence field from inspect_project only for snapshot diagnostics; verify_project returns the canonical verifier evidence envelope. The verifier never submits forms, calls providers, or disables browser sandboxing by default. The send_* tools only build payloads. Provider delivery, legal compliance, and external acceptance remain unknown without independent evidence.';
 const definitions = TOOL_DEFINITIONS.map(([name, description]) => ({ name, description, inputSchema: TOOL_SCHEMAS[name], ...(TOOL_OUTPUT_SCHEMAS[name] ? { outputSchema: TOOL_OUTPUT_SCHEMAS[name] } : {}), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
 const handlers = new Map(TOOL_DEFINITIONS.map(([name, , handler]) => [name, handler]));
 const negotiateProtocolVersion = (requested) => requested === SUPPORTED_PROTOCOL_VERSION ? requested : SUPPORTED_PROTOCOL_VERSION;
@@ -19,7 +19,7 @@ async function handle(message) {
   }
   const isNotification = !Object.hasOwn(message, 'id');
   if (message.method === 'notifications/initialized' || message.method === 'notifications/cancelled') return;
-  if (message.method === 'initialize') return isNotification ? undefined : result(message.id, { protocolVersion: negotiateProtocolVersion(message.params?.protocolVersion), capabilities: { tools: {} }, serverInfo: { name: 'clicktrail-mcp', version: '0.2.0' }, instructions: INSTRUCTIONS });
+  if (message.method === 'initialize') return isNotification ? undefined : result(message.id, { protocolVersion: negotiateProtocolVersion(message.params?.protocolVersion), capabilities: { tools: {} }, serverInfo: { name: 'clicktrail-mcp', version: '0.3.0' }, instructions: INSTRUCTIONS });
   if (message.method === 'ping') return isNotification ? undefined : result(message.id, {});
   if (message.method === 'tools/list') return isNotification ? undefined : result(message.id, { tools: definitions });
   if (message.method === 'tools/call') {
