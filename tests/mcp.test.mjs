@@ -13,6 +13,15 @@ test('reconciles stable event IDs', () => { const result = reconcileConversions(
 
 test('builds delivery-neutral conversion payloads', async () => { const { sendSale, checkConversionStatus } = await import('../src/tools.mjs'); assert.equal(sendSale({ eventId: 'evt_1', value: 8 }).payload.eventName, 'Purchase'); assert.equal(checkConversionStatus({ eventId: 'evt_1' }).status, 'unknown'); });
 
+test('does not treat caller-declared statuses or receipts as authoritative', () => {
+  const allPass = Object.fromEntries(['capture','persist','carry','attach','report','dedupe','verify'].map((stage) => [stage, { status: 'pass' }]));
+  assert.equal(detectAttributionGaps({ evidence: allPass }).status, 'needs-review');
+  assert.equal(attributionHealth({ statuses: allPass }).pass, 0);
+  assert.equal(verifyConversionDelivery({ providerReceipt: { accepted: true } }).status, 'unknown');
+  const provenance = { source: 'provider-api', receiptId: 'receipt-1' };
+  assert.equal(verifyConversionDelivery({ providerReceipt: { accepted: true, provenance } }).status, 'unknown');
+});
+
 
 test('generates consent-gated and first-touch-safe snippets', async () => {
   const { generateNextjsIntegration, generateShopifyIntegration } = await import('../src/tools.mjs');
@@ -21,8 +30,13 @@ test('generates consent-gated and first-touch-safe snippets', async () => {
   assert.match(next, /consentGranted/);
   assert.match(next, /alreadyCaptured/);
   assert.match(next, /twclid/);
+  const nextAction = generateNextjsIntegration().files['server-action.ts'];
+  assert.match(nextAction, /^'use server';/);
+  assert.match(nextAction, /JSON\.parse/);
+  assert.match(next, /serialized\.length <= 3000/);
   assert.match(shopify, /consentGranted/);
   assert.match(shopify, /!localStorage\.getItem/);
+  assert.match(generateShopifyIntegration().files['order-webhook.js'], /ct_consent/);
 });
 
 test('inspects a project and reports unproven runtime evidence', () => {
@@ -32,11 +46,16 @@ test('inspects a project and reports unproven runtime evidence', () => {
   assert.equal(inspection.evidence.capture.reason, undefined);
   assert.match(inspection.evidence.attach.reason, /No lead/);
   assert.equal(detectAttributionGaps(inspection).status, 'blocked');
+  const tampered = structuredClone(inspection.evidence);
+  tampered.capture.status = 'pass';
+  assert.notEqual(detectAttributionGaps({ evidence: tampered }).status, 'ready');
 });
 
 test('plans and simulates a consented synthetic journey', () => {
   const plan = planInstallation({ framework: 'nextjs' });
-  assert.equal(plan.install, 'npm install @vizuh/clicktrail-next');
+  assert.equal(plan.install, 'npm install @vizuh/clicktrail @vizuh/clicktrail-browser');
+  assert.equal(planInstallation({ framework: 'node' }).install, 'npm install @vizuh/clicktrail');
+  assert.match(planInstallation({ framework: 'shopify' }).install, /No published Shopify adapter/);
   const simulation = simulateAdClick({ url: 'https://example.test/pricing?gclid=synthetic', consent: true, accountId: 'acct_1', eventId: 'evt_1' });
   assert.equal(simulation.stages.capture, true);
   assert.equal(simulation.stages.attach, true);
@@ -47,7 +66,9 @@ test('plans and simulates a consented synthetic journey', () => {
 test('verifies capture, form, CRM, and provider evidence separately', () => {
   assert.equal(verifyCapture({ expectedClickId: 'x', captured: { gclid: 'x' }, consent: true }).status, 'pass');
   assert.equal(verifyFormAttachment({ attribution: { gclid: 'x' }, fields: { gclid: 'x' } }).status, 'pass');
+  assert.equal(verifyFormAttachment({ attribution: {}, fields: {} }).status, 'unknown');
   assert.equal(verifyCrmAttachment({ expected: { gclid: 'x' }, record: { gclid: 'x' } }).status, 'pass');
+  assert.equal(verifyCrmAttachment({ expected: {}, record: {} }).status, 'unknown');
   assert.equal(verifyConversionDelivery({}).status, 'unknown');
 });
 

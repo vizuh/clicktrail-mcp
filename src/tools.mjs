@@ -1,5 +1,8 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
 const CLICK_IDS = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp', 'msclkid', 'ttclid', 'li_fat_id', 'twclid'];
 const LIFECYCLE = ['CAPTURE', 'PERSIST', 'CARRY', 'ATTACH', 'REPORT', 'DEDUPE', 'VERIFY'];
+const EVIDENCE_SECRET = randomBytes(32);
 
 export function captureClickIdSchema() {
   return {
@@ -22,13 +25,24 @@ export function middleware(request) {
   const response = NextResponse.next();
   const consentGranted = request.cookies.get('ct_consent')?.value === 'granted';
   const alreadyCaptured = request.cookies.has('${cookieName}');
-  const captured = Object.fromEntries(IDS.flatMap((key) => { const value = request.nextUrl.searchParams.get(key)?.trim().slice(0, 512); return value ? [[key, value]] : []; }));
+  const captured = Object.fromEntries(IDS.flatMap((key) => { const value = request.nextUrl.searchParams.get(key)?.trim().slice(0, 128); return value ? [[key, value]] : []; }));
+  const serialized = JSON.stringify(captured);
   // Fail closed: connect ct_consent to the host CMP before enabling persistence.
-  if (consentGranted && !alreadyCaptured && Object.keys(captured).length) response.cookies.set('${cookieName}', JSON.stringify(captured), { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 7776000, path: '/' });
+  // Keep below common browser cookie limits; use server-owned storage for larger state.
+  if (consentGranted && !alreadyCaptured && Object.keys(captured).length && serialized.length <= 3000) response.cookies.set('${cookieName}', serialized, { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 7776000, path: '/' });
   return response;
 }`,
-      'server-action.ts': `import { cookies } from 'next/headers';
-export async function getAttribution() { const value = (await cookies()).get('${cookieName}')?.value; return value ? JSON.parse(value) : {}; }`
+      'server-action.ts': `'use server';
+import { cookies } from 'next/headers';
+const IDS = ['gclid','gbraid','wbraid','fbclid','msclkid','ttclid','li_fat_id','twclid'];
+export async function getAttribution() {
+  const value = (await cookies()).get('${cookieName}')?.value;
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return Object.fromEntries(IDS.flatMap((key) => typeof parsed?.[key] === 'string' && parsed[key] ? [[key, parsed[key].slice(0, 128)]] : []));
+  } catch { return {}; }
+}`,
     },
     notes: ['Add consent gating before setting the cookie.', 'Attach the returned record to a server-owned lead/order ID.', 'Use a deterministic destination event ID for retries.']
   };
@@ -40,7 +54,7 @@ export function generateShopifyIntegration(input = {}) {
     platform: 'shopify',
     files: {
       'web-pixel.js': `analytics.subscribe('${eventName}', (event) => { const consentGranted = event?.data?.consent?.advertising === true || globalThis.__CLICKTRAIL_CONSENT__?.advertising === true; if (!consentGranted) return; const url = new URL(event.context.document.location.href); const ids = {}; for (const key of ['gclid','gbraid','wbraid','fbclid','twclid']) { const value = url.searchParams.get(key)?.trim().slice(0, 512); if (value) ids[key] = value; } if (Object.keys(ids).length && !localStorage.getItem('ct_attribution')) localStorage.setItem('ct_attribution', JSON.stringify(ids)); });`,
-      'order-webhook.js': `export function attributionFromOrder(order) { const attrs = Object.fromEntries((order.note_attributes || []).map(({ name, value }) => [name, value])); return { gclid: attrs.gclid, gbraid: attrs.gbraid, wbraid: attrs.wbraid, fbclid: attrs.fbclid }; }`
+      'order-webhook.js': `export function attributionFromOrder(order) { const attrs = Object.fromEntries((order.note_attributes || []).map(({ name, value }) => [name, value])); const consentGranted = attrs.ct_consent === 'granted' || attrs.clicktrail_consent === 'granted'; if (!consentGranted) return {}; return { gclid: attrs.gclid, gbraid: attrs.gbraid, wbraid: attrs.wbraid, fbclid: attrs.fbclid }; }`
     },
     notes: ['Do not treat Shopify note attributes as trusted identity.', 'Use order.id as the idempotency source.', 'Verify browser/server Meta event_id equality before sending CAPI.']
   };
@@ -116,8 +130,32 @@ function queryClickIds(url) {
   }
 }
 
-function stageStatus(value, reason = '') {
-  return { status: value, ...(reason && value !== 'pass' ? { reason } : {}) };
+function provenanceSignature(status, reason, provenance) {
+  return createHmac('sha256', EVIDENCE_SECRET)
+    .update(JSON.stringify([status, reason, provenance.source, provenance.mode]))
+    .digest('hex');
+}
+
+function stageStatus(value, reason = '', provenance = { source: 'clicktrail-mcp', mode: 'synthetic-local' }) {
+  const normalized = { source: String(provenance.source || ''), mode: String(provenance.mode || '') };
+  const effectiveReason = value === 'pass' ? '' : reason;
+  return { status: value, ...(effectiveReason ? { reason: effectiveReason } : {}), provenance: { ...normalized, signature: provenanceSignature(value, effectiveReason, normalized) } };
+}
+
+function hasProvenance(value) {
+  if (!value || typeof value !== 'object' || !value.provenance || typeof value.provenance !== 'object' || Array.isArray(value.provenance)) return false;
+  const provenance = value.provenance;
+  if (typeof provenance.source !== 'string' || typeof provenance.mode !== 'string' || typeof provenance.signature !== 'string') return false;
+  const expected = provenanceSignature(value.status, value.reason || '', provenance);
+  const supplied = Buffer.from(provenance.signature, 'hex');
+  const actual = Buffer.from(expected, 'hex');
+  return supplied.length === actual.length && timingSafeEqual(supplied, actual);
+}
+
+function trustedStatus(value) {
+  const status = typeof value === 'string' ? value : value?.status;
+  if (!['pass', 'fail'].includes(status)) return status || 'unknown';
+  return hasProvenance(value) ? status : 'unknown';
 }
 
 /** Inspect a caller-provided project snapshot without reading the filesystem. */
@@ -132,13 +170,13 @@ export function inspectProject(input = {}) {
     : packageJson.type === 'module' || source.includes('node:') ? 'node' : 'generic';
   const has = (pattern) => pattern.test(source);
   const evidence = {
-    capture: stageStatus(has(/gclid|gbraid|wbraid|fbclid|captureAttribution|createClickTrail/i) ? 'pass' : 'fail', 'No allowlisted click-ID capture found'),
-    persist: stageStatus(has(/cookie|localStorage|sessionStorage|persist|storage/i) ? 'pass' : 'fail', 'No persistence boundary found'),
-    carry: stageStatus(has(/redirect|cross.?domain|middleware|linker|query/i) ? 'pass' : 'unknown', 'Carry boundary was not proven by the snapshot'),
-    attach: stageStatus(has(/attachAttribution|crm|lead|account|contact|form/i) ? 'pass' : 'fail', 'No lead/account attachment boundary found'),
-    report: stageStatus(has(/uploadClickConversions|datamanager|conversion|offline/i) ? 'pass' : 'unknown', 'No destination reporting code found'),
-    dedupe: stageStatus(has(/dedupe|idempot|orderId|eventId|event_id/i) ? 'pass' : 'unknown', 'No deduplication key found'),
-    verify: stageStatus(Array.isArray(input.tests) && input.tests.length > 0 ? 'pass' : 'unknown', 'No test evidence was supplied'),
+    capture: stageStatus(has(/gclid|gbraid|wbraid|fbclid|captureAttribution|createClickTrail/i) ? 'pass' : 'fail', 'No allowlisted click-ID capture found', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    persist: stageStatus(has(/cookie|localStorage|sessionStorage|persist|storage/i) ? 'pass' : 'fail', 'No persistence boundary found', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    carry: stageStatus(has(/redirect|cross.?domain|middleware|linker|query/i) ? 'pass' : 'unknown', 'Carry boundary was not proven by the snapshot', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    attach: stageStatus(has(/attachAttribution|crm|lead|account|contact|form/i) ? 'pass' : 'fail', 'No lead/account attachment boundary found', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    report: stageStatus(has(/uploadClickConversions|datamanager|conversion|offline/i) ? 'pass' : 'unknown', 'No destination reporting code found', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    dedupe: stageStatus(has(/dedupe|idempot|orderId|eventId|event_id/i) ? 'pass' : 'unknown', 'No deduplication key found', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
+    verify: stageStatus(Array.isArray(input.tests) && input.tests.length > 0 ? 'pass' : 'unknown', 'No test evidence was supplied', { source: 'clicktrail-mcp', mode: 'source-inspection' }),
   };
   return { framework, evidence, clickTrailDetected: Boolean(dependencies['@vizuh/clicktrail-next'] || dependencies['@vizuh/clicktrail-browser'] || has(/clicktrail/i)), filesInspected: Object.keys(files).sort() };
 }
@@ -148,9 +186,9 @@ export function detectAttributionGaps(input = {}) {
   const gaps = [];
   for (const stage of STAGES) {
     const state = evidence[stage];
-    const status = typeof state === 'string' ? state : state?.status;
+    const status = trustedStatus(state);
     if (status === 'fail') gaps.push({ code: `${stage.toUpperCase()}_MISSING`, severity: stage === 'capture' || stage === 'attach' ? 'high' : 'medium', fix: `Implement and test the ${stage} boundary before moving to the next stage.` });
-    else if (status !== 'pass') gaps.push({ code: `${stage.toUpperCase()}_UNPROVEN`, severity: 'medium', fix: `Supply runnable evidence for the ${stage} boundary; do not mark it complete from generated code alone.` });
+    else if (status !== 'pass') gaps.push({ code: `${stage.toUpperCase()}_UNPROVEN`, severity: 'medium', fix: `Supply runnable evidence for the ${stage} boundary with provenance; do not mark it complete from generated code alone.` });
   }
   return { gaps, status: gaps.some((gap) => gap.severity === 'high') ? 'blocked' : gaps.length ? 'needs-review' : 'ready' };
 }
@@ -158,12 +196,11 @@ export function detectAttributionGaps(input = {}) {
 export function planInstallation(input = {}) {
   const framework = FRAMEWORKS.includes(input.framework) ? input.framework : 'generic';
   const plans = {
-    nextjs: { install: 'npm install @vizuh/clicktrail-next', files: ['middleware.ts', 'app/actions/identify-account.ts'], steps: ['Capture at the server request boundary.', 'Persist first touch with an explicit consent gate.', 'Use a shared parent-domain cookie only for same-site subdomains.', 'Attach attribution to a server-owned account or lead ID.', 'Run the synthetic journey and project tests.'] },
-    node: { install: 'npm install @vizuh/clicktrail-node', files: ['src/attribution.ts', 'src/conversions.ts'], steps: ['Capture from the trusted request boundary.', 'Persist only after consent.', 'Attach to the server-owned lead record.', 'Use a stable event or order ID for deduplication.', 'Verify destination receipts separately.'] },
-    shopify: { install: 'npm install @vizuh/clicktrail-shopify', files: ['web-pixel.js', 'order-webhook.js'], steps: ['Capture in the Web Pixel after consent.', 'Carry allowlisted IDs through cart attributes.', 'Read attributes from the server webhook.', 'Use the order ID as the deduplication key.', 'Verify provider delivery with a real receipt.'] },
+    nextjs: { install: 'npm install @vizuh/clicktrail @vizuh/clicktrail-browser', files: ['middleware.ts', 'app/actions/identify-account.ts'], steps: ['Capture at the server request boundary.', 'Persist first touch with an explicit consent gate.', 'Use a shared parent-domain cookie only for same-site subdomains.', 'Attach attribution to a server-owned account or lead ID.', 'Run the synthetic journey and project tests.'] },
+    node: { install: 'npm install @vizuh/clicktrail', files: ['src/attribution.ts', 'src/conversions.ts'], steps: ['Capture from the trusted request boundary.', 'Persist only after consent.', 'Attach to the server-owned lead record.', 'Use a stable event or order ID for deduplication.', 'Verify destination receipts separately.'] },
+    shopify: { install: 'No published Shopify adapter; use the generated source only after host review.', files: ['web-pixel.js', 'order-webhook.js'], steps: ['Capture in the Web Pixel after consent.', 'Carry allowlisted IDs through cart attributes.', 'Read attributes from the server webhook.', 'Use the order ID as the deduplication key.', 'Verify provider delivery with a real receipt.'] },
     generic: { install: 'npm install @vizuh/clicktrail', files: ['attribution-capture.js', 'lead-attachment.js'], steps: ['Capture and normalize at the first trusted boundary.', 'Persist with consent and an explicit expiry.', 'Carry the record through redirects and forms.', 'Attach to a server-owned record.', 'Run local simulation before provider delivery.'] },
-  };
-  return { framework, ...plans[framework], evidenceBoundary: 'Generated code is not runtime proof; provider delivery remains unknown without a receipt.' };
+  };  return { framework, ...plans[framework], evidenceBoundary: 'Generated code is not runtime proof; provider delivery remains unknown without a receipt.' };
 }
 
 export function simulateAdClick(input = {}) {
@@ -197,29 +234,33 @@ export function verifyFormAttachment(input = {}) {
   const attribution = input.attribution && typeof input.attribution === 'object' ? input.attribution : {};
   const fields = input.fields && typeof input.fields === 'object' ? input.fields : {};
   const keys = Array.isArray(input.requiredKeys) && input.requiredKeys.length ? input.requiredKeys : CLICK_IDS;
-  const missing = keys.filter((key) => attribution[key] && fields[key] !== attribution[key]);
-  return { status: missing.length ? 'fail' : 'pass', checkedKeys: keys.filter((key) => attribution[key]), missing, reason: missing.length ? 'Attached form fields differ from canonical attribution.' : '' };
+  const checkedKeys = keys.filter((key) => attribution[key]);
+  if (!checkedKeys.length) return { status: 'unknown', checkedKeys: [], missing: [], reason: 'No non-empty canonical attribution fields were supplied.' };
+  const missing = checkedKeys.filter((key) => fields[key] !== attribution[key]);
+  return { status: missing.length ? 'fail' : 'pass', checkedKeys, missing, reason: missing.length ? 'Attached form fields differ from canonical attribution.' : '' };
 }
 
 export function verifyCrmAttachment(input = {}) {
   const expected = input.expected && typeof input.expected === 'object' ? input.expected : {};
   const record = input.record && typeof input.record === 'object' ? input.record : {};
-  const missing = Object.keys(expected).filter((key) => record[key] !== expected[key]);
-  return { status: missing.length ? 'fail' : 'pass', missing, checkedKeys: Object.keys(expected), reason: missing.length ? 'CRM record does not contain the expected attribution values.' : '' };
+  const checkedKeys = Object.keys(expected);
+  if (!checkedKeys.length) return { status: 'unknown', missing: [], checkedKeys: [], reason: 'No expected canonical fields were supplied.' };
+  const missing = checkedKeys.filter((key) => record[key] !== expected[key]);
+  return { status: missing.length ? 'fail' : 'pass', missing, checkedKeys, reason: missing.length ? 'CRM record does not contain the expected attribution values.' : '' };
 }
 
 export function verifyConversionDelivery(input = {}) {
   const receipt = input.providerReceipt;
   if (!receipt || typeof receipt !== 'object') return { status: 'unknown', reason: 'No provider receipt was supplied; local payload construction is not delivery proof.' };
-  if (receipt.accepted === true || receipt.status === 'accepted') return { status: 'pass', reason: 'Provider receipt reports acceptance.' };
-  return { status: 'fail', reason: boundedString(receipt.error || receipt.status || 'Provider rejected or did not accept the conversion.') };
+  return { status: 'unknown', reason: 'Provider delivery requires a verified provider receipt; caller-supplied receipt data is not delivery proof.' };
 }
 
 export function attributionHealth(input = {}) {
   const statuses = input.statuses && typeof input.statuses === 'object' ? input.statuses : input.stages || {};
   const normalized = Object.fromEntries(STAGES.map((stage) => {
     const value = statuses[stage];
-    return [stage, typeof value === 'string' ? value : value === true ? 'pass' : value === false ? 'fail' : value?.status || 'unknown'];
+    if (value === true || value === false) return [stage, 'unknown'];
+    return [stage, trustedStatus(value)];
   }));
   const pass = STAGES.filter((stage) => normalized[stage] === 'pass').length;
   const fail = STAGES.filter((stage) => normalized[stage] === 'fail').length;
