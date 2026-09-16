@@ -3,10 +3,10 @@
 > **ClickTrail is the open-source attribution handoff layer that keeps observed acquisition context attached to conversion records inside the stack you own.**
 
 ClickTrail MCP makes that handoff inspectable and completable by coding agents.
-It helps agents inspect a supplied project snapshot, detect attribution gaps,
-plan and generate consent-aware integrations, simulate synthetic journeys,
-verify each lifecycle boundary, calculate coverage, and reconcile conversion
-records.
+It supports a safe snapshot mode and a bounded Verify mode. Agents can inspect a
+supplied project snapshot, run `clicktrail-verify` against an explicit local
+repository and synthetic/staging URL, receive a canonical evidence report, and
+optionally ask TypeSafe to route and prioritize the next remediation.
 
 ## Build and test
 
@@ -44,13 +44,13 @@ grok mcp add --scope project clicktrail -- node /path/to/clicktrail-mcp/dist/ind
 grok inspect
 ```
 
-This manual setup is intentional while `@vizuh/clicktrail-mcp@0.2.0` is not
+This manual setup is intentional while `@vizuh/clicktrail-mcp@0.3.0` is not
 published on npm. Do not copy an `npx` command into a distributable plugin until
 that exact package version is reachable from the public registry. xAI's
 Responses API remote MCP surface is separate and accepts streaming HTTP or SSE,
 not this stdio process.
 
-The server reads newline-delimited JSON-RPC messages from stdin and writes responses to stdout. It does not read project files, call ad platforms, transmit customer data, or claim live verification without an explicit provider receipt.
+The server reads newline-delimited JSON-RPC messages from stdin and writes responses to stdout. Snapshot tools do not read project files. The explicit `verify_project` tool invokes a local verifier against a caller-selected repository and URL; it does not submit forms, call ad platforms, transmit customer data, or claim live provider verification.
 
 ## Workflow tools
 
@@ -58,15 +58,19 @@ The server reads newline-delimited JSON-RPC messages from stdin and writes respo
 - `generate_nextjs_integration` / `generate_shopify_integration`
 - `simulate_ad_click` → `verify_capture` → `verify_form_attachment` → `verify_crm_attachment`
 - `verify_conversion_delivery` → `attribution_health`
+- `verify_project` → `advise_report` (optional TypeSafe routing and prioritization)
 
 The server also provides `capture_click_id_schema`, `validate_attribution_pipeline`, `diagnose_missing_click_ids`, `calculate_click_id_coverage`, `reconcile_conversions`, `send_conversion`, `send_qualified_lead`, `send_sale`, and `check_conversion_status`. Delivery tools build payloads only. `check_conversion_status` always returns `unknown`; `verify_conversion_delivery` classifies a caller-supplied receipt without authenticating it.
 
 
 ## Choosing tools and interpreting results
 
-All 20 tools operate locally on supplied data, need no credentials, and perform
-no external writes or provider calls. Discovery includes parameter descriptions
-and read-only annotations; initialization includes workflow guidance.
+Snapshot tools operate locally on supplied data, need no credentials, and perform
+no external writes or provider calls. `verify_project` is an explicit local
+subprocess boundary and may access the selected repository and URL. `advise_report`
+uses TypeSafe only when configured and sends redacted summaries. Discovery
+includes parameter descriptions and read-only annotations; initialization
+includes workflow guidance.
 
 | Question | Tool | Result boundary |
 | --- | --- | --- |
@@ -78,6 +82,8 @@ and read-only annotations; initialization includes workflow guidance.
 | How should I verify an event without a receipt? | `check_conversion_status` | Always `unknown`, with manual next checks |
 | Does this supplied receipt report acceptance? | `verify_conversion_delivery` | No receipt provenance or event-ID verification |
 | Do CRM and destination records match? | `reconcile_conversions` | Event-ID matching and same-currency totals |
+| Can I run the deterministic verifier? | `verify_project` | Canonical `0.3.0` report and evidence envelope |
+| Which skill should handle the findings? | `advise_report` | Optional TypeSafe advice; factual statuses remain unchanged |
 
 `check_conversion_status` and `simulate_ad_click` expose output schemas and return
 both `structuredContent` and equivalent JSON text for older clients. For example:

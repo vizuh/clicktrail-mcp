@@ -1,5 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
+import { typeSafeAdvisory } from './advisor.mjs';
+import { verifyProject as runVerifier, validateVerifierReport } from './verify.mjs';
+
 const CLICK_IDS = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp', 'msclkid', 'ttclid', 'li_fat_id', 'twclid'];
 const LIFECYCLE = ['CAPTURE', 'PERSIST', 'CARRY', 'ATTACH', 'REPORT', 'DEDUPE', 'VERIFY'];
 const EVIDENCE_SECRET = randomBytes(32);
@@ -255,6 +258,18 @@ export function verifyConversionDelivery(input = {}) {
   return { status: 'unknown', reason: 'Provider delivery requires a verified provider receipt; caller-supplied receipt data is not delivery proof.' };
 }
 
+export async function verifyProject(input = {}) {
+  return runVerifier(input);
+}
+
+export async function adviseReport(input = {}) {
+  const evidence = input.evidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return { status: 'unavailable', reason: 'evidence must be a verifier evidence envelope.' };
+  const errors = validateVerifierReport({ schemaVersion: '0.3.0', findings: evidence.findings, evidence });
+  if (errors.length) return { status: 'unavailable', reason: 'evidence must come from a valid clicktrail-verify report.' };
+  return typeSafeAdvisory(evidence);
+}
+
 export function attributionHealth(input = {}) {
   const statuses = input.statuses && typeof input.statuses === 'object' ? input.statuses : input.stages || {};
   const normalized = Object.fromEntries(STAGES.map((stage) => {
@@ -288,6 +303,8 @@ export const TOOL_SCHEMAS = Object.freeze({
   verify_crm_attachment: { type: 'object', additionalProperties: false, required: ['expected', 'record'], properties: { expected: { description: "Flat map of expected CRM field values. Empty means no keys are checked.", type: 'object' }, record: { description: "Caller-supplied flat CRM record snapshot compared against expected; no CRM connection is made.", type: 'object' } } },
   verify_conversion_delivery: { type: 'object', additionalProperties: false, properties: { providerReceipt: { description: "Caller-supplied receipt object with accepted boolean, status string, and/or error string. Omit for unknown; an empty object fails. No receipt provenance or event identity is verified.", type: 'object', "properties": {"accepted": {"type": "boolean", "description": "True is sufficient for pass even when status conflicts."}, "status": {"type": "string", "description": "The exact string accepted is sufficient for pass; other values fail unless accepted is true."}, "error": {"type": "string", "description": "Failure detail used when neither acceptance signal is present."}} } } },
   attribution_health: { type: 'object', additionalProperties: false, properties: { stages: { description: "Seven lowercase lifecycle keys mapped to booleans, pass/fail/unknown strings, or {status} objects. Missing keys are unknown; ignored when statuses is supplied.", type: 'object' }, statuses: { description: "Seven lowercase lifecycle keys mapped to pass/fail/unknown, booleans, or {status} objects. Overrides stages when supplied; omitted stages become unknown.", type: 'object' } } },
+  verify_project: { type: 'object', additionalProperties: false, required: ['repo', 'url'], properties: { repo: { type: 'string', description: 'Absolute local repository path. The verifier reads source files in this explicit path only.' }, url: { type: 'string', description: 'Synthetic or staging http(s) URL. Forms are not submitted.' }, secondUrl: { type: 'string', description: 'Optional second synthetic or staging http(s) URL for a two-touch journey.' }, contract: { type: 'object', description: 'Declarative project contract; no selectors or executable adapters.' }, clicktrailRoot: { type: 'string', description: 'Optional absolute ClickTrail source root for repository mapping.' }, executablePath: { type: 'string', description: 'Optional browser executable path.' } } },
+  advise_report: { type: 'object', additionalProperties: false, required: ['evidence'], properties: { evidence: { type: 'object', description: 'The evidence envelope returned by verify_project. It is used for advisory routing only.' } } },
 });
 
 // These two tools have fully specified outputs; keep schemas tied to their wire results.
@@ -320,6 +337,26 @@ export const TOOL_OUTPUT_SCHEMAS = Object.freeze({
           },
         }])) },
       evidence: { type: 'string', const: 'synthetic-local-only', description: 'Results do not establish browser or provider behavior.' },
+    },
+  },
+  verify_project: {
+    type: 'object', required: ['status'],
+    properties: {
+      status: { type: 'string', enum: ['complete', 'unknown'] },
+      report: { type: 'object', description: 'Canonical clicktrail-verify report when status is complete.' },
+      evidenceAuthority: { type: 'string', const: 'clicktrail-verify-deterministic' },
+      reason: { type: 'string' },
+    },
+  },
+  advise_report: {
+    type: 'object', required: ['status'],
+    properties: {
+      status: { type: 'string', enum: ['available', 'unavailable'] },
+      provider: { type: 'string', const: 'typesafe-system-one' },
+      model: { type: 'string', const: 'jev-latest' },
+      answers: { type: 'object', description: 'Typed advisory answers; never factual findings.' },
+      fallback: { type: 'object', description: 'Deterministic advisory fallback.' },
+      reason: { type: 'string' },
     },
   },
 });
@@ -363,4 +400,6 @@ export const TOOL_DEFINITIONS = [
   ["verify_crm_attachment", "Compare every supplied expected field with record using strict equality. Returns pass/fail, missing keys, checkedKeys, and reason. Empty expected passes with no checked keys and proves no attachment. Reads no CRM; supply flat snapshots and use verify_form_attachment for browser form fields.", verifyCrmAttachment],
   ["verify_conversion_delivery", "Classify a caller-supplied providerReceipt: accepted=true or status=accepted returns pass; other supplied objects return fail; no receipt returns unknown. Returns status and reason only. Does not query or authenticate the provider or match receipts to event IDs; caller must establish provenance. Use check_conversion_status for a verification checklist.", verifyConversionDelivery],
   ["attribution_health", "Summarize seven declared lifecycle stages as score 0\u2013100, pass/fail/unknown counts, and normalized statuses. statuses takes precedence over stages; missing stages are unknown and booleans map to pass/fail. This is not measured session coverage or live proof. Use calculate_click_id_coverage for cohort ratios and detect_attribution_gaps for remediation.", attributionHealth],
+  ["verify_project", "Run the local clicktrail-verify binary against an explicit absolute repository path and synthetic or staging URL. Returns the canonical deterministic evidence report when CLICKTRAIL_VERIFY_BIN or clicktrail-verify is available. No forms are submitted, no provider APIs are called, and browser sandboxing remains enabled by default.", verifyProject],
+  ["advise_report", "Use optional TypeSafe System One judgments to route a valid clicktrail-verify evidence envelope to the narrowest skill and rank remediation. TypeSafe receives only redacted finding summaries. It cannot change deterministic PASS, FAIL, UNKNOWN, WARN, or NOT_RUN results; without TYPESAFE_API_KEY, a deterministic advisory fallback is returned.", adviseReport],
 ];

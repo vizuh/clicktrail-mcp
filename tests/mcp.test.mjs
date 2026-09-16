@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp, chmod, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureClickIdSchema, calculateClickIdCoverage, diagnoseMissingClickIds, reconcileConversions, validateAttributionPipeline, inspectProject, detectAttributionGaps, planInstallation, simulateAdClick, verifyCapture, verifyFormAttachment, verifyCrmAttachment, verifyConversionDelivery, attributionHealth, TOOL_DEFINITIONS, TOOL_SCHEMAS } from '../src/tools.mjs';
+import { buildAdvisoryState, deterministicAdvisory, typeSafeAdvisory } from '../src/advisor.mjs';
+import { validateVerifierReport, verifyProject } from '../src/verify.mjs';
 
-test('exposes attribution tools', () => assert.deepEqual(TOOL_DEFINITIONS.map(([name]) => name), ['capture_click_id_schema','generate_nextjs_integration','generate_shopify_integration','validate_attribution_pipeline','diagnose_missing_click_ids','calculate_click_id_coverage','reconcile_conversions','send_conversion','send_qualified_lead','send_sale','check_conversion_status','inspect_project','detect_attribution_gaps','plan_installation','simulate_ad_click','verify_capture','verify_form_attachment','verify_crm_attachment','verify_conversion_delivery','attribution_health']));
+test('exposes attribution tools', () => assert.deepEqual(TOOL_DEFINITIONS.map(([name]) => name), ['capture_click_id_schema','generate_nextjs_integration','generate_shopify_integration','validate_attribution_pipeline','diagnose_missing_click_ids','calculate_click_id_coverage','reconcile_conversions','send_conversion','send_qualified_lead','send_sale','check_conversion_status','inspect_project','detect_attribution_gaps','plan_installation','simulate_ad_click','verify_capture','verify_form_attachment','verify_crm_attachment','verify_conversion_delivery','attribution_health','verify_project','advise_report']));
 test('returns canonical click IDs and lifecycle', () => { const s = captureClickIdSchema(); assert.ok(s.clickIds.some((x) => x.name === 'gclid')); assert.deepEqual(s.lifecycle, ['CAPTURE','PERSIST','CARRY','ATTACH','REPORT','DEDUPE','VERIFY']); });
 test('validates complete pipeline', () => { const stages = Object.fromEntries(['capture','persist','carry','attach','report','dedupe','verify'].map((x) => [x, true])); assert.equal(validateAttributionPipeline({ eventId: 'evt_1', stages, consent: { advertising: true } }).valid, true); });
 test('diagnoses dropped redirects and missing cookies', () => { const result = diagnoseMissingClickIds({ landingQuery: { gclid: 'x' }, redirectDroppedQuery: true, cookieMissing: true }); assert.equal(result.status, 'blocked'); assert.equal(result.checks.length, 2); });
@@ -88,7 +93,7 @@ test('stdio server returns protocol errors without crashing', async () => {
   const responses = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(result.code, 0);
   assert.deepEqual(responses.slice(0, 2).map((response) => response.error.code), [-32700, -32600]);
-  assert.equal(responses[2].result.tools.length, 20);
+  assert.equal(responses[2].result.tools.length, 22);
   for (const tool of responses[2].result.tools) {
     assert.deepEqual(tool.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     for (const [key, property] of Object.entries(tool.inputSchema.properties)) {
@@ -157,4 +162,63 @@ test('publishes workflow instructions and matching structured status and simulat
   assert.deepEqual(responses[7].result.structuredContent.clickIds, {});
   assert.equal(responses[8].result.isError, true);
   assert.equal(responses[8].result.structuredContent, undefined);
+});
+
+
+test('keeps verifier evidence authoritative and routes advice separately', async () => {
+  const evidence = {
+    schemaVersion: '1.0.0',
+    producer: 'clicktrail-verify',
+    observations: [{ id: 'browser:grant-consent' }],
+    findings: [{ id: 'CONSENT_APP_EVENTS', status: 'FAIL', evidenceRefs: ['browser:grant-consent'], owner: 'host_application' }],
+    advisory: { status: 'not-run' },
+  };
+  const report = { schemaVersion: '0.3.0', findings: evidence.findings, evidence };
+  assert.deepEqual(validateVerifierReport(report), []);
+  assert.equal(deterministicAdvisory(evidence).nextSkill, 'utm-and-click-id-persistence');
+  const state = buildAdvisoryState(evidence);
+  assert.equal(state.findings[0].status, 'FAIL');
+  assert.equal(JSON.stringify(state).includes('secret'), false);
+  const advised = await typeSafeAdvisory(evidence, {
+    apiKey: 'test-key',
+    endpoint: 'https://typesafe.test/v1/systemone',
+    fetchImpl: async (_url, options) => {
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.model, 'jev-latest');
+      assert.equal(payload.state.findings[0].id, 'CONSENT_APP_EVENTS');
+      return { ok: true, async json() { return { answers: {
+        nextSkill: { type: 'choice', choice: 'utm-and-click-id-persistence', confidence: 0.91 },
+        repairPriority: { type: 'score', score: 3.4, confidence: 0.88 },
+        humanReview: { type: 'noul', noul: 0.72 },
+      } }; } };
+    },
+  });
+  assert.equal(advised.status, 'available');
+  assert.equal(advised.answers.nextSkill.choice, 'utm-and-click-id-persistence');
+});
+
+test('returns unknown for unsafe verifier invocation inputs', async () => {
+  assert.equal((await verifyProject({ repo: 'relative/path', url: 'https://example.test' })).status, 'unknown');
+  assert.equal((await verifyProject({ repo: '/tmp/project', url: 'file:///tmp/page' })).status, 'unknown');
+});
+
+
+test('runs a canonical verifier subprocess without changing its findings', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'clicktrail-mcp-test-'));
+  const fake = path.join(temp, 'fake-verify.mjs');
+  await writeFile(fake, `#!/usr/bin/env node
+import { mkdir, writeFile } from 'node:fs/promises';
+const args = process.argv.slice(2);
+const output = args[args.indexOf('--output') + 1];
+await mkdir(output, { recursive: true });
+const evidence = { schemaVersion: '1.0.0', producer: 'clicktrail-verify', observations: [{ id: 'source:inventory' }], findings: [{ id: 'BROWSER_ERRORS', status: 'UNKNOWN', evidenceRefs: ['source:inventory'], evaluator: 'clicktrail-verify-deterministic' }], advisory: { status: 'not-run' } };
+await writeFile(output + '/report.json', JSON.stringify({ schemaVersion: '0.3.0', findings: evidence.findings, evidence }));
+`);
+  await chmod(fake, 0o755);
+  try {
+    const result = await verifyProject({ repo: path.join(temp, 'repo'), url: 'https://example.test/?gclid=synthetic' }, { verifyBin: fake, tempRoot: temp });
+    assert.equal(result.status, 'complete');
+    assert.equal(result.evidenceAuthority, 'clicktrail-verify-deterministic');
+    assert.equal(result.report.findings[0].status, 'UNKNOWN');
+  } finally { await rm(temp, { recursive: true, force: true }); }
 });
