@@ -1,7 +1,7 @@
 const MODEL = 'jev-latest';
 const API_URL = 'https://api.typesafe.ai/v1/systemone';
 const SKILLS = [
-  'click-tracking-audit', 'attribution-debugging', 'click-id-debugging',
+  'clicktrail-evidence-system', 'click-tracking-audit', 'attribution-debugging', 'click-id-debugging',
   'utm-and-click-id-persistence', 'click-to-crm-attribution',
   'offline-conversion-tracking', 'conversion-reconciliation',
   'cross-domain-attribution', 'meta-capi-deduplication', 'preserve-click-ids',

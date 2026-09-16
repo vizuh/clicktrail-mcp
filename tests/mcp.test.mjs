@@ -165,6 +165,10 @@ test('publishes workflow instructions and matching structured status and simulat
 });
 
 
+test('offers the coordinating evidence skill for advisory routing', () => {
+  assert.ok(buildAdvisoryState({ schemaVersion: '1.0.0', producer: 'clicktrail-verify', findings: [] }).availableSkills.includes('clicktrail-evidence-system'));
+});
+
 test('keeps verifier evidence authoritative and routes advice separately', async () => {
   const evidence = {
     schemaVersion: '1.0.0',
